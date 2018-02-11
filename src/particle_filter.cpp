@@ -48,19 +48,16 @@ void ParticleFilter::init(double x, double y, double theta, double std[], int nu
 
 
 void ParticleFilter::prediction(double delta_t, double std_pos[], double velocity, double yaw_rate) {
-    // TODO: Add measurements to each particle and add random Gaussian noise.
-    // NOTE: When adding noise you may find std::normal_distribution and std::default_random_engine useful.
-    //  http://en.cppreference.com/w/cpp/numeric/random/normal_distribution
-    //  http://www.cplusplus.com/reference/random/default_random_engine/
-    for (int i = 0; i < num_particles; ++i) {
-#define EPSILON 0.00001
+
+    for (auto& particle: particles) {
+	#define EPSILON 0.00001
 	if (fabs(yaw_rate) < EPSILON) {
-	    particles[i].x += velocity * delta_t * cos(particles[i].theta);
-	    particles[i].y += velocity * delta_t * sin(particles[i].theta);
+	    particle.x += velocity * delta_t * cos(particle.theta);
+	    particle.y += velocity * delta_t * sin(particle.theta);
 	} else {
-	    particles[i].x += velocity / yaw_rate * (sin(particles[i].theta + yaw_rate*delta_t) - sin(particles[i].theta));
-	    particles[i].y += velocity / yaw_rate * (cos(particles[i].theta) - cos(particles[i].theta + yaw_rate*delta_t));
-	    particles[i].theta += yaw_rate * delta_t;
+	    particle.x += velocity / yaw_rate * (sin(particle.theta + yaw_rate*delta_t) - sin(particle.theta));
+	    particle.y += velocity / yaw_rate * (cos(particle.theta) - cos(particle.theta + yaw_rate*delta_t));
+	    particle.theta += yaw_rate * delta_t;
 	}
 
 	std::random_device rd{};
@@ -69,50 +66,85 @@ void ParticleFilter::prediction(double delta_t, double std_pos[], double velocit
 	normal_distribution<double> x_gen(0, std_pos[0]);
 	normal_distribution<double> y_gen(0, std_pos[1]);
 	normal_distribution<double> theta_gen(0, std_pos[2]);
-	particles[i].x += x_gen(gen);
-	particles[i].y += y_gen(gen);
-	particles[i].theta += theta_gen(gen);
+	particle.x += x_gen(gen);
+	particle.y += y_gen(gen);
+	particle.theta += theta_gen(gen);
     }
 }
 
-void ParticleFilter::dataAssociation(std::vector<LandmarkObs> predicted, std::vector<LandmarkObs>& observations) {
-    // TODO: Find the predicted measurement that is closest to each observed measurement and assign the
-    //   observed measurement to this particular landmark.
-    // NOTE: this method will NOT be called by the grading code. But you will probably find it useful to
-    //   implement this method and use it as a helper during the updateWeights phase.
+void ParticleFilter::dataAssociation(const std::vector<LandmarkObs>& predicted, std::vector<LandmarkObs>& observations) {
+    for (auto& ob: observations) {
+	int id = -1;
+	auto min_distance_squared = numeric_limits<double>::max();
 
-    for (int i = 0; i < observations.size(); i++) {
-      // initilize
-      int landmark_id = -1;
-      double min_distance_squared = numeric_limits<double>::max();
+	for (auto& pred: predicted) {
+	    auto distance_squared = pow(ob.x - pred.x, 2) + pow(ob.y - pred.y, 2);
 
-      // naive nearest-neigbor
-      for (int j = 0; j < predicted.size(); ++j) {
-	LandmarkObs p = predicted[j];
-
-	double distance_squared = pow(observations[i].x - p.x, 2) + pow(observations[i].y - p.y, 2);
-
-	if (distance_squared < min_distance_squared) {
-	  min_distance_squared = distance_squared;
-	  landmark_id = p.id;
+	    // relexation algorithm
+	    if (distance_squared < min_distance_squared) {
+		min_distance_squared = distance_squared;
+		id = pred.id;
+	    }
 	}
-      }
-      observations[i].id = landmark_id;
+	ob.id = id;
     }
 }
 
+// sensor_range = 50m, std_landmark: x:0.3, y:0.3, observations are noisy, map_landmarks are known
 void ParticleFilter::updateWeights(double sensor_range, double std_landmark[], 
 				   const std::vector<LandmarkObs> &observations, const Map &map_landmarks) {
-    // TODO: Update the weights of each particle using a mult-variate Gaussian distribution. You can read
-    //   more about this distribution here: https://en.wikipedia.org/wiki/Multivariate_normal_distribution
-    // NOTE: The observations are given in the VEHICLE'S coordinate system. Your particles are located
-    //   according to the MAP'S coordinate system. You will need to transform between the two systems.
-    //   Keep in mind that this transformation requires both rotation AND translation (but no scaling).
-    //   The following is a good resource for the theory:
-    //   https://www.willamette.edu/~gorr/classes/GeneralGraphics/Transforms/transforms2d.htm
-    //   and the following is a good resource for the actual equation to implement (look at equation
-    //   3.33
-    //   http://planning.cs.uiuc.edu/node99.html
+    /*
+     * For each particle
+     */
+    for (auto& particle: particles) {
+	/*
+	 * finding all landmarks from map that are in range
+	 * this is the predicted landmark set for this particle
+	 */
+	vector<LandmarkObs> landmarks_in_range_of_particle;
+	for (const auto& lm: map_landmarks.landmark_list) {
+	    if (pow(lm.x_f - particle.x, 2) + pow(lm.y_f - particle.y, 2) < pow(sensor_range,2))
+		landmarks_in_range_of_particle.push_back(lm);
+	}
+
+	/*
+	 * tranform observations to map coordinates
+	 */
+	vector<LandmarkObs> landmarks_observed;
+	for (const auto& ob: observations) {
+	    auto x = cos(particle.theta)*ob.x - sin(particle.theta)*ob.y + particle.x;
+	    auto y = sin(particle.theta)*ob.x + cos(particle.theta)*ob.y + particle.y;
+	    landmarks_observed.emplace_back(ob.id,x,y);
+	}
+
+	/*
+	 * data association
+	 */
+	dataAssociation(landmarks_in_range_of_particle, landmarks_observed);
+
+	/*
+	 * calculate weight for this particle
+	 */
+	particle.weight = 1.0;
+	for (const auto& landmark_observed: landmarks_observed) {
+	    auto predicted_x = 0.0;
+	    auto predicted_y = 0.0;
+
+	    // get corresponding predicted landmark of particle
+	    for (const auto& landmark_particle: landmarks_in_range_of_particle) {
+		if (landmark_particle.id == landmarks_observed.id) {
+		    predicted_x = landmark_particle.x;
+		    predicted_y = landmark_particle.y;
+		    break;
+		}
+	    }
+
+	    // weight for this observation
+	    // https://en.wikipedia.org/wiki/Gaussian_function
+	    auto weight = (1/(2*M_PI*std_landmark[0]*std_landmark[1])) * exp(-(pow(predicted_x-landmark_observed.x,2)/(2*pow(std_landmark[0],2))+(pow(predicted_y-landmark_observed.y,2)/(2*pow(std_landmark[1],2)))));
+	    particle.weight *= weight;
+	}
+    }
 }
 
 void ParticleFilter::resample() {
