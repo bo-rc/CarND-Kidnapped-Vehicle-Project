@@ -104,7 +104,7 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 	vector<LandmarkObs> landmarks_in_range_of_particle;
 	for (const auto& lm: map_landmarks.landmark_list) {
 	    if (pow(lm.x_f - particle.x, 2) + pow(lm.y_f - particle.y, 2) < pow(sensor_range,2))
-		landmarks_in_range_of_particle.push_back(lm);
+		landmarks_in_range_of_particle.emplace_back(lm.id_i, lm.x_f, lm.y_f);
 	}
 
 	/*
@@ -114,7 +114,7 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 	for (const auto& ob: observations) {
 	    auto x = cos(particle.theta)*ob.x - sin(particle.theta)*ob.y + particle.x;
 	    auto y = sin(particle.theta)*ob.x + cos(particle.theta)*ob.y + particle.y;
-	    landmarks_observed.emplace_back(ob.id,x,y);
+	    landmarks_observed.emplace_back(ob.id, x, y);
 	}
 
 	/*
@@ -132,7 +132,7 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 
 	    // get corresponding predicted landmark of particle
 	    for (const auto& landmark_particle: landmarks_in_range_of_particle) {
-		if (landmark_particle.id == landmarks_observed.id) {
+		if (landmark_particle.id == landmark_observed.id) {
 		    predicted_x = landmark_particle.x;
 		    predicted_y = landmark_particle.y;
 		    break;
@@ -148,10 +148,28 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 }
 
 void ParticleFilter::resample() {
-    // TODO: Resample particles with replacement with probability proportional to their weight.
-    // NOTE: You may find std::discrete_distribution helpful here.
-    //   http://en.cppreference.com/w/cpp/numeric/random/discrete_distribution
+    /*
+     * weights list
+     */
+    vector<double> weights;
+    for (int i = 0; i < num_particles; ++i) {
+	weights.push_back(particles[i].weight);
+    }
 
+    random_device rd;
+    mt19937 gen(rd());
+    discrete_distribution<> d(begin(weights), end(weights));
+
+    /*
+     * draw the same number of particles
+     */
+    vector<Particle> new_particles;
+    for (int i = 0; i < num_particles; ++i) {
+	auto idx = d(gen);
+	new_particles.push_back(particles[idx]);
+    }
+
+    swap(particles, new_particles);
 }
 
 Particle ParticleFilter::SetAssociations(Particle& particle, const std::vector<int>& associations, 
